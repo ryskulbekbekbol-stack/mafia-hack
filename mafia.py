@@ -30,12 +30,11 @@ ROLES = [
     "Ксинтер",     # взламывает цель (узнаёт её роль)
     "Хуминтер",    # проверяет, атакована ли цель
     "Сватер",      # блокирует действие цели ночью
-    "Хакер",       # может один раз подменить голос (упрощённо: узнаёт роль или участвует в убийстве)
-    "Ддосер",      # может убить цель (если цель не защищена)
-    "Досер",       # тоже может убить цель (аналог ддосера)
+    "Хакер",       # может участвовать в убийстве (часть мафии)
+    "Ддосер",      # может убить цель (часть мафии)
+    "Досер",       # может убить цель (часть мафии)
 ]
 
-# Определим, кто в мафии (убивают)
 MAFIA_ROLES = ["Ддосер", "Досер", "Хакер"]
 
 class MafiaGame:
@@ -100,7 +99,7 @@ class MafiaGame:
         results = []
         protected_this_night = set()
         blocked_this_night = set()
-        kill_targets = []  # цели для убийства (от ддосер/досер/хакер)
+        kill_votes = defaultdict(int)  # голоса убийц
 
         # Сначала обрабатываем блокировку (сватер)
         for uid, tid in self.night_actions.items():
@@ -112,13 +111,13 @@ class MafiaGame:
             if self.roles[uid] == "Доксер" and tid not in blocked_this_night:
                 protected_this_night.add(tid)
 
-        # Теперь убийцы (ддосер, досер, хакер)
-        kill_votes = defaultdict(int)
+        # Теперь убийцы (ддосер, досер, хакер) – голосуют за цель
         for uid, tid in self.night_actions.items():
-            if self.roles[uid] in MAFIA_ROLES and tid not in blocked_this_night:
+            if self.roles[uid] in MAFIA_ROLES and uid not in blocked_this_night:
                 kill_votes[tid] += 1
+
+        # Если есть голоса убийц, выбираем цель
         if kill_votes:
-            # Выбираем цель с максимальным числом голосов убийц
             max_votes = max(kill_votes.values())
             candidates = [tid for tid, v in kill_votes.items() if v == max_votes]
             target = random.choice(candidates)
@@ -126,7 +125,7 @@ class MafiaGame:
                 self.kill(target)
                 results.append(f"🔪 Убит {self.players[target]} (жертва мафии)")
 
-        # Теперь информационные роли (сообщим результаты утром каждому)
+        # Информационные роли – собираем сообщения для утра
         info_messages = []
         for uid, tid in self.night_actions.items():
             role = self.roles[uid]
@@ -135,25 +134,22 @@ class MafiaGame:
             if uid in blocked_this_night:
                 info_messages.append(f"❌ {self.players[uid]} (роль {role}) заблокирован и ничего не узнал.")
                 continue
-            # Обрабатываем остальные роли
+
             if role == "Геоинтер":
                 info_messages.append(f"🌍 {self.players[uid]} узнал, что {self.players[tid]} — {self.roles[tid]}")
             elif role == "Осинтер":
-                # Узнаёт, кто голосовал за цель (в предыдущий день)
-                # Для простоты: сообщим, сколько голосов было за цель
+                # Узнаёт, сколько голосов было за цель в предыдущий день
                 prev_votes = self.votes.get(tid, 0)
                 info_messages.append(f"📊 {self.players[uid]} выяснил, что за {self.players[tid]} голосовало {prev_votes} человек(а).")
             elif role == "Ксинтер":
                 info_messages.append(f"💻 {self.players[uid]} взломал {self.players[tid]}, его роль — {self.roles[tid]}")
             elif role == "Хуминтер":
-                # Проверяет, была ли цель атакована (в убийцах)
                 if tid in kill_votes:
-                    info_messages.append(f"🔎 {self.players[uid}] обнаружил, что {self.players[tid]} был целью атаки.")
+                    info_messages.append(f"🔎 {self.players[uid]} обнаружил, что {self.players[tid]} был целью атаки.")
                 else:
-                    info_messages.append(f"🔎 {self.players[uid}] не заметил подозрительной активности вокруг {self.players[tid]}.")
+                    info_messages.append(f"🔎 {self.players[uid]} не заметил подозрительной активности вокруг {self.players[tid]}.")
             elif role == "Хакер":
-                # Хакер может участвовать в убийстве (уже учтён) или делать что-то ещё
-                # Оставим как часть мафии
+                # Хакер уже учтён в убийцах
                 pass
 
         # Очищаем ночные данные
@@ -200,7 +196,6 @@ class MafiaGame:
         return self.phase, []
 
     def check_win(self):
-        # Определим победителей
         alive_roles = [self.roles[uid] for uid in self.alive]
         mafia_count = sum(1 for r in alive_roles if r in MAFIA_ROLES)
         civilians_count = len(self.alive) - mafia_count
@@ -223,7 +218,8 @@ def start_cmd(message: Message):
         "/action <id цели> — ночное действие\n"
         "/vote <id цели> — голосовать днём\n"
         "/status — статус игры\n"
-        "/players — список игроков с ID",
+        "/players — список игроков с ID\n"
+        "/nextphase — перейти к следующей фазе (только создатель)",
         parse_mode='Markdown')
 
 @bot.message_handler(commands=['newgame'])
@@ -269,7 +265,7 @@ def start_game(message: Message):
         for uid in game.players:
             role = game.get_role(uid)
             try:
-                bot.send_message(uid, f"🤫 Твоя роль: **{role}**\nДействуй в ночи командой /action <id цели> в общем чате или в личку.", parse_mode='Markdown')
+                bot.send_message(uid, f"🤫 Твоя роль: **{role}**\nДействуй в ночи командой /action <id цели> в общем чате.", parse_mode='Markdown')
             except:
                 pass
         bot.send_message(chat_id, f"🎲 Игра началась! Ночь {game.day_num}. Приватные роли разосланы.\nИгроки: {', '.join(game.players.values())}")
@@ -376,7 +372,6 @@ def status(message: Message):
         text += f"Голосов: {vote_summary if vote_summary else 'пока нет'}"
     bot.reply_to(message, text, parse_mode='Markdown')
 
-# ========== АВТОМАТИЧЕСКИЙ ПЕРЕХОД ФАЗ (для демо - по команде ведущего) ==========
 @bot.message_handler(commands=['nextphase'])
 def nextphase(message: Message):
     chat_id = message.chat.id
@@ -395,7 +390,6 @@ def nextphase(message: Message):
             msg += "\n".join(results)
         else:
             msg += "Ночь прошла спокойно."
-        # Проверка победы
         winner = game.check_win()
         if winner:
             msg += f"\n\n🏆 **{winner} победили!** Игра окончена."
